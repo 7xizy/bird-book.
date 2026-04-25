@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>鳥類圖鑑</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    .card { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+    img { max-width: 200px; }
+  </style>
+</head>
+<body>
+
+<h1>🐦 我的鳥類紀錄圖鑑</h1>
+
+<input id="name" placeholder="鳥名"><br><br>
+<input id="image" placeholder="圖片網址"><br><br>
+<input id="location" placeholder="地點"><br><br>
+<button onclick="addBird()">新增紀錄</button>
+
+<h2>圖鑑列表</h2>
+<div id="list"></div>
+
+<script>
+let birds = JSON.parse(localStorage.getItem("birds")) || [];
+
+function addBird() {
+  const bird = {
+    name: document.getElementById("name").value,
+    image: document.getElementById("image").value,
+    location: document.getElementById("location").value
+  };
+
+  birds.push(bird);
+  localStorage.setItem("birds", JSON.stringify(birds));
+  render();
+}
+
+function render() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+
+  birds.forEach(b => {
+    list.innerHTML += `
+      <div class="card">
+        <h3>${b.name}</h3>
+        <img src="${b.image}">
+        <p>地點：${b.location}</p>
+      </div>
+    `;
+  });
+}
+
+render();
+</script>
+
+</body>
+</html>
