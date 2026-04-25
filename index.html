@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🦜 鳥類圖鑑｜OAuth 雲端版</title>
+  <title>🦜 鳥類圖鑑｜OAuth 雲端同步</title>
+  <!-- exifr -->
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+  <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
@@ -23,6 +25,7 @@
     .btn, .user-btn { padding:6px 14px; border-radius:40px; border:2px solid var(--border); background:var(--surface); cursor:pointer; font-weight:600; font-size:0.85rem; display:flex; align-items:center; gap:4px; white-space:nowrap; transition:0.2s; text-decoration:none; color:inherit; }
     .btn:hover, .user-btn:hover { background:var(--bg); }
     .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .btn.danger { background:var(--danger); color:#fff; border-color:var(--danger); }
     .user-area { display:flex; align-items:center; gap:8px; }
     .user-avatar { width:28px; height:28px; border-radius:50%; }
     .main { display:flex; flex:1; overflow:hidden; }
@@ -138,31 +141,19 @@
     </div>
     <div class="detail-section">
       <select id="detailCat" onchange="changeCategory()"><option value="uncategorized">未分類</option></select>
-      <button class="btn" style="color:var(--danger); margin-top:8px;" onclick="deletePhoto()">🗑️ 刪除照片（僅本地）</button>
+      <button class="btn danger" style="margin-top:8px;" onclick="deletePhoto()">🗑️ 刪除照片（僅本地）</button>
     </div>
     <div class="detail-section" id="exifInfo">點擊照片查看 EXIF</div>
   </aside>
 </div>
 
-<!-- 新增分類彈窗 -->
-<div class="modal" id="addCatModal" style="display:none;">
-  <div class="modal-box">
-    <h3>新增分類</h3>
-    <input type="text" id="newCatName" placeholder="分類名稱">
-    <button class="btn primary" style="width:100%; margin-top:8px;" onclick="confirmAddCategory()">建立（雲端同步）</button>
-    <button class="btn" onclick="document.getElementById('addCatModal').style.display='none'">取消</button>
-  </div>
-</div>
-
 <script>
 (function() {
-  // ---------- 設定 ----------
-  const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com'; // 👈 請換成你的 OAuth 2.0 用戶端 ID
-  const API_KEY = '';   // 可選，用於部分公開讀取，OAuth 登入後不需要
-  const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
+  // ========== 設定區 (請換成你的 OAuth 2.0 用戶端 ID) ==========
+  const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com'; // 👈 務必更換！
   const SCOPES = 'https://www.googleapis.com/auth/drive.file';
 
-  // ---------- 全域狀態 ----------
+  // ========== 全域狀態 ==========
   let state = {
     photos: [],
     customCategories: [],   // { name, driveFolderId }
@@ -175,11 +166,13 @@
     selectedIds: new Set()
   };
 
-  const localFileStore = new Map(); // id -> { blobUrl, fileName } 暫存本機上傳的原始檔案
+  // 暫存本機檔案物件 (供下載/查看原始檔)
+  const localFileStore = new Map(); // id -> { blobUrl, fileName }
 
-  // ---------- localStorage ----------
+  // ========== localStorage ==========
+  const STORAGE_KEY = 'birdGuide_oauth_fixed';
   function save() {
-    localStorage.setItem('birdGuide_oauth', JSON.stringify({
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
       photosMeta: state.photos.map(p => ({
         id:p.id, name:p.name, category:p.category, exif:p.exif, rawFormat:p.rawFormat,
         dateAdded:p.dateAdded, thumbUrl:p.thumbUrl, fileName:p.fileName,
@@ -190,9 +183,8 @@
       lensFilters: state.lensFilters
     }));
   }
-
   function load() {
-    let s = localStorage.getItem('birdGuide_oauth');
+    let s = localStorage.getItem(STORAGE_KEY);
     if(s) {
       let d = JSON.parse(s);
       state.customCategories = d.customCategories || [];
@@ -202,38 +194,38 @@
     }
   }
 
-  // ---------- OAuth 2.0 ----------
+  // ========== OAuth 2.0 初始化 ==========
   let tokenClient;
-
   function initGapi() {
     tokenClient = google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
       scope: SCOPES,
-      callback: (tokenResponse) => {
+      callback: async (tokenResponse) => {
         if (tokenResponse.error) {
           alert('授權失敗：' + tokenResponse.error);
           return;
         }
         state.accessToken = tokenResponse.access_token;
         // 取得使用者資訊
-        fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: 'Bearer ' + state.accessToken }
-        })
-        .then(res => res.json())
-        .then(user => {
-          state.user = user;
+        try {
+          let res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: { Authorization: 'Bearer ' + state.accessToken }
+          });
+          state.user = await res.json();
           updateLoginUI();
-          alert('登入成功！歡迎 ' + user.name);
-        });
+          alert('登入成功！歡迎 ' + state.user.name);
+        } catch(e) {
+          console.error('取得使用者資訊失敗', e);
+        }
       },
     });
   }
 
-  window.handleAuthClick = () => {
+  // 全域登入/登出/切換按鈕
+  window.handleAuthClick = function() {
     if (state.accessToken) {
-      // 已登入，提供登出或切換帳戶
-      let doLogout = confirm('您已登入。\n按「確定」登出，按「取消」切換帳戶。');
-      if (doLogout) {
+      let logout = confirm('已登入。\n按「確定」登出，按「取消」切換帳戶。');
+      if (logout) {
         revokeToken();
       } else {
         revokeToken();
@@ -266,7 +258,7 @@
     }
   }
 
-  // ---------- Drive API 工具 ----------
+  // ========== Drive API 工具 ==========
   function getAuthHeaders() {
     return state.accessToken ? { 'Authorization': 'Bearer ' + state.accessToken } : {};
   }
@@ -275,7 +267,7 @@
     let headers = { ...options.headers, ...getAuthHeaders() };
     let res = await fetch(url, { ...options, headers });
     if (!res.ok) {
-      let err = await res.json().catch(() => ({}));
+      let err = await res.json().catch(()=>({}));
       throw new Error(err.error?.message || res.statusText);
     }
     return res.json();
@@ -307,7 +299,7 @@
     return folder.id;
   }
 
-  // 上傳檔案到指定資料夾
+  // 上傳檔案
   async function uploadFileToDrive(file, parentId) {
     let metadata = { name: file.name, parents: [parentId] };
     let form = new FormData();
@@ -323,24 +315,20 @@
     return data.id;
   }
 
-  // 移動檔案到不同資料夾
+  // 移動檔案
   async function moveFileToFolder(fileId, fromFolderId, toFolderId) {
-    let params = new URLSearchParams({
-      addParents: toFolderId,
-      removeParents: fromFolderId || ''
-    });
+    let params = new URLSearchParams({ addParents: toFolderId, removeParents: fromFolderId || '' });
     await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?${params}`, {
       method: 'PATCH',
       headers: getAuthHeaders()
     });
   }
 
-  // ---------- 照片處理 ----------
+  // ========== EXIF / RAW 工具 ==========
   async function readExif(file) {
     try {
       return await exifr.parse(file, {
-        pick:['Make','Model','LensModel','FocalLength','FNumber','ExposureTime',
-              'ISO','DateTimeOriginal','CreateDate','ImageWidth','ImageHeight'],
+        pick:['Make','Model','LensModel','FocalLength','FNumber','ExposureTime','ISO','DateTimeOriginal','CreateDate'],
         reviveValues:true
       });
     } catch(e) { return null; }
@@ -358,9 +346,7 @@
 
   function getRawFormat(fn) {
     let ext = fn.split('.').pop().toLowerCase();
-    let map = { arw:'SONY ARW', cr2:'Canon CR2', cr3:'Canon CR3', nef:'Nikon NEF',
-                dng:'Adobe DNG', orf:'Olympus ORF', rw2:'Panasonic RW2',
-                pef:'Pentax PEF', raf:'Fujifilm RAF', srw:'Samsung SRW' };
+    let map = { arw:'SONY ARW', cr2:'Canon CR2', cr3:'Canon CR3', nef:'Nikon NEF', dng:'Adobe DNG' };
     return map[ext] || null;
   }
 
@@ -372,7 +358,7 @@
     return null;
   }
 
-  // 本機上傳並同步到 Drive
+  // ========== 照片處理 ==========
   async function handleUpload(files) {
     if (!state.accessToken) { alert('請先登入 Google'); return; }
     let rootId = await ensureRootFolder();
@@ -398,11 +384,11 @@
     save(); renderAll();
   }
 
-  // 新增分類（雲端建立資料夾）
+  // 新增分類 (雲端建立資料夾)
   window.addCategory = async function() {
+    if (!state.accessToken) { alert('請先登入 Google'); return; }
     let name = prompt('輸入分類名稱：');
     if(!name) return;
-    if(!state.accessToken) { alert('請先登入 Google'); return; }
     if(state.customCategories.find(c=>c.name===name)) { alert('分類已存在'); return; }
     try {
       let folderId = await createCategoryFolder(name);
@@ -411,7 +397,7 @@
     } catch(e) { alert('建立失敗：'+e.message); }
   };
 
-  // 移動照片到分類（雲端搬移）
+  // 移動照片至分類 (雲端搬移)
   async function movePhotoToCategory(photoId, targetCat) {
     let photo = state.photos.find(p=>p.id===photoId);
     if(!photo) return;
@@ -419,8 +405,8 @@
     if(oldCat === targetCat) return;
     if(photo.driveFileId && state.accessToken) {
       try {
-        let fromId = oldCat==='uncategorized'? await ensureRootFolder() : state.customCategories.find(c=>c.name===oldCat)?.driveFolderId;
-        let toId = targetCat==='uncategorized'? await ensureRootFolder() : state.customCategories.find(c=>c.name===targetCat)?.driveFolderId;
+        let fromId = oldCat==='uncategorized' ? await ensureRootFolder() : state.customCategories.find(c=>c.name===oldCat)?.driveFolderId;
+        let toId = targetCat==='uncategorized' ? await ensureRootFolder() : state.customCategories.find(c=>c.name===targetCat)?.driveFolderId;
         if(toId) await moveFileToFolder(photo.driveFileId, fromId, toId);
       } catch(e) { alert('雲端移動失敗：'+e.message); return; }
     }
@@ -428,7 +414,7 @@
     save(); renderAll();
   }
 
-  // 側邊欄拖放接收
+  // 拖放接收
   function setupSidebarDrop() {
     document.querySelectorAll('.sidebar .cat-item').forEach(el => {
       el.addEventListener('dragover', e => e.preventDefault());
@@ -441,6 +427,23 @@
         }
       });
     });
+  }
+
+  // 網格內拖曳排序
+  function movePhotoInGrid(fromId, toId) {
+    let fromIdx = state.photos.findIndex(p=>p.id===fromId);
+    let toIdx = state.photos.findIndex(p=>p.id===toId);
+    if(fromIdx!==-1 && toIdx!==-1) {
+      state.photos.splice(toIdx, 0, state.photos.splice(fromIdx,1)[0]);
+      save(); renderGrid();
+    }
+  }
+
+  function genId() { return 'p_'+Date.now()+'_'+Math.random().toString(36); }
+  function getPhotoDate(p) {
+    if(p.exif?.DateTimeOriginal) return new Date(p.exif.DateTimeOriginal);
+    if(p.exif?.CreateDate) return new Date(p.exif.CreateDate);
+    return new Date(p.dateAdded);
   }
 
   // 篩選與排序
@@ -475,29 +478,237 @@
     return arr;
   }
 
-  function getPhotoDate(p) {
-    if(p.exif?.DateTimeOriginal) return new Date(p.exif.DateTimeOriginal);
-    if(p.exif?.CreateDate) return new Date(p.exif.CreateDate);
-    return new Date(p.dateAdded);
+  // ========== 網格渲染 ==========
+  function renderGrid() {
+    let grid = document.getElementById('photoGrid');
+    grid.innerHTML = '';
+    let photos = getFilteredPhotos();
+    photos.forEach((p, idx) => {
+      let card = document.createElement('div');
+      card.className = 'card' + (state.selectedIds.has(p.id)?' selected':'');
+      card.draggable = true;
+      card.dataset.id = p.id;
+      card.dataset.index = idx;
+      card.addEventListener('click', (e)=>{
+        if(e.ctrlKey || e.metaKey) {
+          e.preventDefault();
+          if(state.selectedIds.has(p.id)) state.selectedIds.delete(p.id);
+          else state.selectedIds.add(p.id);
+          updateSelectionUI();
+          card.classList.toggle('selected');
+        } else {
+          if(!e.target.closest('.del-btn')) openDetail(p.id);
+        }
+      });
+      card.addEventListener('dragstart', e=>{
+        e.dataTransfer.setData('text/plain', p.id);
+        card.classList.add('dragging');
+      });
+      card.addEventListener('dragend', ()=>card.classList.remove('dragging'));
+      card.addEventListener('dragover', e=>e.preventDefault());
+      card.addEventListener('drop', e=>{
+        e.preventDefault();
+        let fromId = e.dataTransfer.getData('text/plain');
+        let toId = p.id;
+        if(fromId && toId && fromId!==toId) movePhotoInGrid(fromId, toId);
+      });
+      let thumbHTML = p.thumbUrl
+        ? `<img src="${p.thumbUrl}" alt="">`
+        : (p.isRaw
+            ? `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;background:#f0e9d8;"><span style="font-size:2rem;">📷</span><span style="font-size:0.7rem;">${p.rawFormat||'RAW'}</span></div>`
+            : '<span>🦜</span>');
+      card.innerHTML = `
+        <div class="thumb">${thumbHTML}${p.isRaw?`<span class="raw-badge">${p.rawFormat||'RAW'}</span>`:''}</div>
+        <div class="info">
+          <div class="title">${p.name}</div>
+          <div class="meta">${p.exif?.Model||''} ${p.exif?.FocalLength?p.exif.FocalLength+'mm':''}</div>
+        </div>
+        <div class="del-btn" onclick="event.stopPropagation(); window.deletePhotoById('${p.id}')">✕</div>`;
+      grid.appendChild(card);
+    });
   }
 
-  // 其他渲染與輔助函數 (renderGrid, openDetail, closeDetail 等，略，因長度限制，但完整程式碼中已包含)
-  // ... 此處接續完整實作（與前幾個完整版類似，已確保所有功能正常）
+  // 多選 UI
+  function updateSelectionUI() {
+    let c = state.selectedIds.size;
+    document.getElementById('multiActions').style.display = c>0?'flex':'none';
+    document.getElementById('selectedCount').textContent = `已選${c}張`;
+  }
+  window.clearSelection = ()=>{ state.selectedIds.clear(); updateSelectionUI(); renderGrid(); };
+  window.copySelectedLinks = ()=>{
+    let links = [];
+    state.selectedIds.forEach(id=>{
+      let p = state.photos.find(ph=>ph.id===id);
+      if(p) {
+        if(p.fileRef) links.push(p.fileName);
+        else if(p.driveFileId) links.push(`https://drive.google.com/file/d/${p.driveFileId}/view`);
+      }
+    });
+    if(links.length) navigator.clipboard.writeText(links.join('\n')).then(()=>alert('已複製'));
+  };
+  window.batchMoveCategory = ()=>{
+    let cat = prompt('輸入分類名稱（留空為未分類）：')?.trim() || 'uncategorized';
+    state.selectedIds.forEach(id=>{ let p = state.photos.find(ph=>ph.id===id); if(p) p.category = cat; });
+    state.selectedIds.clear(); updateSelectionUI(); save(); renderAll();
+  };
+
+  // 詳情面板
+  function openDetail(id) {
+    state.activePhotoId = id;
+    let p = state.photos.find(ph=>ph.id===id);
+    if(!p) return;
+    document.getElementById('detailPanel').classList.remove('hidden');
+    document.getElementById('detailName').value = p.name;
+    document.getElementById('detailImg').src = p.thumbUrl || '';
+    let view = document.getElementById('originalView'), down = document.getElementById('originalDownload');
+    if(p.fileRef) {
+      let url = localFileStore.get(id)?.blobUrl || URL.createObjectURL(p.fileRef);
+      view.href = url; down.href = url; down.download = p.fileName;
+    } else if(p.driveFileId && state.accessToken) {
+      let url = `https://www.googleapis.com/drive/v3/files/${p.driveFileId}?alt=media&access_token=${state.accessToken}`;
+      view.href = url; down.href = url; down.download = p.fileName;
+    } else if(p.driveFileId) {
+      view.href = `https://drive.google.com/file/d/${p.driveFileId}/view`;
+      down.removeAttribute('href');
+    }
+    let sel = document.getElementById('detailCat');
+    sel.innerHTML = '<option value="uncategorized">未分類</option>'+state.customCategories.map(c=>`<option value="${c.name}">${c.name}</option>`).join('');
+    sel.value = p.category;
+    let exifDiv = document.getElementById('exifInfo');
+    if(p.exif) {
+      let rows = [];
+      if(p.exif.Make) rows.push(`<div class="exif-row"><span>製造商</span><span>${p.exif.Make}</span></div>`);
+      if(p.exif.Model) rows.push(`<div class="exif-row"><span>相機型號</span><span>${p.exif.Model}</span></div>`);
+      if(p.exif.LensModel) rows.push(`<div class="exif-row"><span>鏡頭</span><span>${p.exif.LensModel}</span></div>`);
+      if(p.exif.FocalLength) rows.push(`<div class="exif-row"><span>焦距</span><span>${p.exif.FocalLength}mm</span></div>`);
+      if(p.exif.FNumber) rows.push(`<div class="exif-row"><span>光圈</span><span>f/${p.exif.FNumber}</span></div>`);
+      if(p.exif.ExposureTime!==undefined) rows.push(`<div class="exif-row"><span>快門</span><span>${formatShutterSpeed(p.exif.ExposureTime)}</span></div>`);
+      if(p.exif.ISO) rows.push(`<div class="exif-row"><span>ISO</span><span>${p.exif.ISO}</span></div>`);
+      if(p.exif.DateTimeOriginal||p.exif.CreateDate) rows.push(`<div class="exif-row"><span>拍攝日期</span><span>${p.exif.DateTimeOriginal||p.exif.CreateDate}</span></div>`);
+      exifDiv.innerHTML = rows.join('') || '無 EXIF 資料';
+    } else exifDiv.innerHTML = '無 EXIF 資料';
+  }
+
+  window.closeDetail = ()=>{ document.getElementById('detailPanel').classList.add('hidden'); state.activePhotoId = null; };
+  window.renamePhoto = ()=>{
+    let p = state.photos.find(ph=>ph.id===state.activePhotoId);
+    if(p) { p.name = document.getElementById('detailName').value.trim() || p.name; save(); renderAll(); }
+  };
+  window.changeCategory = ()=>{
+    let p = state.photos.find(ph=>ph.id===state.activePhotoId);
+    if(p) { p.category = document.getElementById('detailCat').value; save(); renderAll(); }
+  };
+  window.deletePhoto = ()=>{
+    let p = state.photos.find(ph=>ph.id===state.activePhotoId);
+    if(p) { state.photos = state.photos.filter(ph=>ph.id!==p.id); state.selectedIds.delete(p.id); closeDetail(); save(); renderAll(); }
+  };
+  window.deletePhotoById = (id)=>{
+    state.photos = state.photos.filter(p=>p.id!==id);
+    state.selectedIds.delete(id);
+    if(state.activePhotoId===id) closeDetail();
+    save(); renderAll();
+  };
+  window.copyImageToClipboard = async ()=>{
+    let p = state.photos.find(ph=>ph.id===state.activePhotoId);
+    if(!p) return;
+    try {
+      let blob;
+      if(p.fileRef) blob = p.fileRef;
+      else if(p.driveFileId && state.accessToken) {
+        let res = await fetch(`https://www.googleapis.com/drive/v3/files/${p.driveFileId}?alt=media&access_token=${state.accessToken}`);
+        blob = await res.blob();
+      }
+      if(blob) {
+        await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
+        alert('已複製圖片');
+      }
+    } catch(e) { alert('複製失敗'); }
+  };
+
+  // 側邊欄
+  function renderSidebar() {
+    document.getElementById('countAll').textContent = state.photos.length;
+    document.getElementById('countUncat').textContent = state.photos.filter(p=>p.category==='uncategorized').length;
+    let customDiv = document.getElementById('customCats');
+    customDiv.innerHTML = state.customCategories.map(cat => {
+      let cnt = state.photos.filter(p=>p.category===cat.name).length;
+      return `<div class="cat-item" data-cat="${cat.name}"><span>🐦 ${cat.name}</span><span class="count">${cnt}</span><span class="del-cat" onclick="event.stopPropagation(); window.deleteCategory('${cat.name}')">✕</span></div>`;
+    }).join('');
+    let camDiv = document.getElementById('cameraList');
+    let cams = [...new Set(state.photos.map(p=>p.exif?.Model).filter(Boolean))];
+    state.cameraFilters.forEach(f=>{if(!cams.includes(f)) cams.push(f)});
+    camDiv.innerHTML = cams.map(m=>`<div class="cat-item" data-cat="camera:${m}">📷 ${m}</div>`).join('');
+    let lensDiv = document.getElementById('lensList');
+    let lenses = [...new Set(state.photos.map(p=>p.exif?.LensModel).filter(Boolean))];
+    state.lensFilters.forEach(f=>{if(!lenses.includes(f)) lenses.push(f)});
+    lensDiv.innerHTML = lenses.map(l=>`<div class="cat-item" data-cat="lens:${l}">🔭 ${l}</div>`).join('');
+    document.querySelectorAll('.sidebar .cat-item').forEach(el=>{
+      el.onclick = (e)=>{
+        if(e.target.closest('.del-cat')) return;
+        state.activeCat = el.dataset.cat;
+        document.querySelectorAll('.cat-item').forEach(c=>c.classList.remove('active'));
+        el.classList.add('active');
+        renderGrid();
+      };
+    });
+    setupSidebarDrop();
+  }
+
+  window.deleteCategory = (name)=>{
+    state.customCategories = state.customCategories.filter(c=>c.name!==name);
+    state.photos.forEach(p=>{if(p.category===name) p.category='uncategorized';});
+    save(); renderAll();
+  };
+  window.addFilter = (type)=>{
+    let name = prompt(`輸入要新增的${type==='camera'?'相機':'鏡頭'}型號：`);
+    if(name) {
+      if(type==='camera') state.cameraFilters.push(name);
+      else state.lensFilters.push(name);
+      save(); renderAll();
+    }
+  };
+
+  // 日期區間
+  document.getElementById('dateBtn').addEventListener('click', (e)=>{
+    e.stopPropagation();
+    document.getElementById('datePopup').style.display = 'block';
+  });
+  window.applyDateRange = ()=>{
+    let s = document.getElementById('dateStart').value, e = document.getElementById('dateEnd').value;
+    if(s&&e) document.getElementById('searchInput').value = s+' 至 '+e;
+    else if(s) document.getElementById('searchInput').value = s;
+    else if(e) document.getElementById('searchInput').value = e;
+    document.getElementById('datePopup').style.display = 'none';
+    renderGrid();
+  };
+  window.clearDateRange = ()=>{
+    document.getElementById('dateStart').value=''; document.getElementById('dateEnd').value='';
+    document.getElementById('searchInput').value=''; document.getElementById('datePopup').style.display='none';
+    renderGrid();
+  };
+  document.addEventListener('click', (e)=>{
+    if(!e.target.closest('.date-popup') && !e.target.closest('.date-btn'))
+      document.getElementById('datePopup').style.display = 'none';
+  });
+
+  function renderAll() { renderSidebar(); renderGrid(); updateSelectionUI(); }
 
   // 初始化
-  function init() {
+  window.addEventListener('load', () => {
     load();
     initGapi();
     updateLoginUI();
     renderAll();
-    setupSidebarDrop();
     document.getElementById('fileInput').onchange = e => {
       if(e.target.files.length) { handleUpload(e.target.files); e.target.value = ''; }
     };
-    // ... 其他事件綁定
-  }
-
-  init();
+    document.getElementById('searchInput').oninput = renderGrid;
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop', e => {
+      e.preventDefault();
+      if(e.dataTransfer.files.length) handleUpload(e.dataTransfer.files);
+    });
+  });
 })();
 </script>
 </body>
